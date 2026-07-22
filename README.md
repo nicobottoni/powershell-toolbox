@@ -12,10 +12,8 @@ Typical use cases include:
 
 - Active Directory reporting
 - Microsoft 365 administration helpers
-- Exchange Online checks
 - File server and NTFS permission analysis
 - Printer and Universal Print related checks
-- Intune and endpoint management helpers
 - General Windows administration utilities
 - Small reusable PowerShell functions
 
@@ -47,27 +45,10 @@ powershell-toolbox/
 │  ├─ PrintServers/
 │  └─ Reports/
 │
-├─ Intune/
-│  ├─ Devices/
-│  ├─ Policies/
-│  └─ Reports/
-│
 ├─ WindowsAdministration/
 │  ├─ Services/
 │  ├─ EventLogs/
 │  └─ SystemInfo/
-│
-├─ Utilities/
-│  ├─ Logging/
-│  ├─ Export/
-│  └─ Validation/
-│
-├─ Templates/
-│  ├─ ScriptTemplate.ps1
-│  └─ FunctionTemplate.ps1
-│
-├─ Docs/
-│  └─ usage-examples.md
 │
 ├─ .gitignore
 └─ README.md
@@ -91,16 +72,13 @@ Examples:
 Get-ADInactiveUsers.ps1
 Get-ADGroupMembershipReport.ps1
 Export-NTFSPermissions.ps1
-Test-UniversalPrintConnector.ps1
 Get-M365LicenseAssignment.ps1
-Get-IntuneDeviceComplianceReport.ps1
 ```
 
 Avoid unclear names such as:
 
 ```text
 script.ps1
-new.ps1
 test_old.ps1
 final_v2.ps1
 usercheck.ps1
@@ -130,45 +108,6 @@ Repository: powershell-toolbox
 Created: YYYY-MM-DD
 Last Updated: YYYY-MM-DD
 #>
-```
-
-## Basic Script Template
-
-```powershell
-<#
-.SYNOPSIS
-Short summary.
-
-.DESCRIPTION
-Detailed description.
-
-.EXAMPLE
-.\ScriptName.ps1
-
-.NOTES
-Author: Nico Bottoni
-#>
-
-[CmdletBinding()]
-param (
-    [Parameter(Mandatory = $false)]
-    [string]$OutputPath = ".\output.csv"
-)
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
-try {
-    Write-Host "Starting script execution..." -ForegroundColor Cyan
-
-    # Script logic here
-
-    Write-Host "Script completed successfully." -ForegroundColor Green
-}
-catch {
-    Write-Error "Script failed: $($_.Exception.Message)"
-    exit 1
-}
 ```
 
 ## Documentation Standard
@@ -217,32 +156,6 @@ $ServerName = "<server-name>"
 $GroupName = "<group-name>"
 ```
 
-Before committing, review changes with:
-
-```powershell
-git diff
-```
-
-## Git Workflow
-
-Recommended basic workflow:
-
-```powershell
-git status
-git add .
-git commit -m "Add initial PowerShell toolbox structure"
-git push
-```
-
-For future changes:
-
-```powershell
-git checkout -b feature/add-ad-reporting-script
-git add .
-git commit -m "Add AD group membership reporting script"
-git push -u origin feature/add-ad-reporting-script
-```
-
 ## Recommended .gitignore
 
 ```gitignore
@@ -273,12 +186,6 @@ config.local.json
 Thumbs.db
 ```
 
-If example reports are useful for documentation, place sanitized examples in a dedicated folder:
-
-```text
-Docs/examples/
-```
-
 ## Quality Checklist Before Committing a Script
 
 Before adding a script to this repository, check:
@@ -292,20 +199,6 @@ Before adding a script to this repository, check:
 - [ ] Example usage is documented
 - [ ] Script was tested in a safe environment
 - [ ] README or documentation was updated if needed
-
-## Planned Categories
-
-Initial focus areas:
-
-- Active Directory reporting
-- Group membership checks
-- User lifecycle reporting
-- NTFS permission reports
-- Universal Print helper scripts
-- Microsoft 365 license reporting
-- Exchange Online administration helpers
-- Intune device and policy reports
-- General Windows administration utilities
 
 ## Long-Term Goal
 
