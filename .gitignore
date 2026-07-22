@@ -1,0 +1,25 @@
+# PowerShell temporary files
+*.log
+*.tmp
+*.bak
+*.old
+
+# Exported reports
+*.csv
+*.xlsx
+*.json
+*.xml
+
+# Secrets and local configuration
+*.secret.ps1
+*.local.ps1
+.env
+secrets.json
+config.local.json
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
