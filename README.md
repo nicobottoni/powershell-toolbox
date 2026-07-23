@@ -31,7 +31,6 @@ powershell-toolbox/
 │
 ├─ Microsoft365/
 │  ├─ EntraID/
-│  ├─ ExchangeOnline/
 │  ├─ Teams/
 │  └─ Licensing/
 │
