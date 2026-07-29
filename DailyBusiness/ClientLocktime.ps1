@@ -1,18 +1,29 @@
 <#
 .SYNOPSIS
-Displays logon, lock and unlock events for the current day.
+Exports Active Directory SamAccountNames based on email addresses from a CSV file
 
 .DESCRIPTION
-Queries the Windows Security Event Log and returns user logon,
-workstation lock and workstation unlock events that occurred today.
+Imports a CSV file containing email addresses and searches Active Directory for matching users.
+For each matching user, the script exports the email address and corresponding SamAccountName
+to a CSV file.
+
+The input CSV file must contain a column named "email".
+
+.PARAMETER OutputPath
+Defines the directory where the output CSV file will be written.
+ 
+.PARAMETER OutputFileName
+Defines the name of the output CSV file.
 
 .EXAMPLE
-.\Get-ClientLockActivity.ps1
-
+.\Get-SamAccountNameFromEmail.ps1
+ 
 .NOTES
 Author: Nico Bottoni
 Repository: powershell-toolbox
-Category: WindowsAdministration/EventLogs
+Category: ActiveDirectory/Users
+Created: 2024-02-01
+Last Updated: 2025-11-11
 #>
 
 $StartTime = (Get-Date).Date
