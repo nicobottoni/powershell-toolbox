@@ -1,6 +1,23 @@
-# Root-Pfad anpassen
-# "D:\Data\....."
-# "\\KONZFS1861.wgs.wuerth.com\KONZFS1861_vol1\...."
+<#
+.SYNOPSIS
+Finds empty folders within a directory structure and optionally removes them.
+
+.DESCRIPTION
+Recursively scans a specified path, including long paths and UNC shares,
+for empty folders. Each empty folder can be reviewed and deleted individually.
+
+.NOTES
+Author: Nico Bottoni
+Repository: powershell-toolbox
+Category: Filesystem
+Created: 2024-XX-XX
+Last Updated: 2025-11-11
+#>
+
+# Root path to scan
+# Examples:
+# "D:\Data\Folder"
+# "\\FILESERVER\Share\Folder"
 $RootPath = ""
 
 function Convert-ToLongPath {
@@ -19,20 +36,28 @@ function Convert-ToLongPath {
     return "\\?\" + $Path
 }
 
-Write-Host "Starte Suche nach leeren Ordnern..." -ForegroundColor Cyan
+Write-Host "Starting empty folder scan..." -ForegroundColor Cyan
 Write-Host "RootPath: $RootPath"
 Write-Host ""
 
 $LongRootPath = Convert-ToLongPath -Path $RootPath
 
-$EmptyFolders = Get-ChildItem -LiteralPath $LongRootPath -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+$EmptyFolders = Get-ChildItem `
+    -LiteralPath $LongRootPath `
+    -Directory `
+    -Recurse `
+    -Force `
+    -ErrorAction SilentlyContinue |
     Sort-Object FullName -Descending |
     Where-Object {
 
         $FolderPath = $_.FullName
 
         try {
-            $Content = Get-ChildItem -LiteralPath $FolderPath -Force -ErrorAction Stop
+            $Content = Get-ChildItem `
+                -LiteralPath $FolderPath `
+                -Force `
+                -ErrorAction Stop
 
             if ($Content.Count -eq 0) {
                 return $true
@@ -49,8 +74,8 @@ $EmptyFolders = Get-ChildItem -LiteralPath $LongRootPath -Directory -Recurse -Fo
     }
 
 Write-Host ""
-Write-Host "Suche abgeschlossen." -ForegroundColor Cyan
-Write-Host "Gefundene leere Ordner: $($EmptyFolders.Count)" -ForegroundColor Yellow
+Write-Host "Scan completed." -ForegroundColor Cyan
+Write-Host "Empty folders found: $($EmptyFolders.Count)" -ForegroundColor Yellow
 Write-Host ""
 
 foreach ($Folder in $EmptyFolders) {
@@ -58,30 +83,30 @@ foreach ($Folder in $EmptyFolders) {
     $FolderPath = $Folder.FullName
 
     Write-Host ""
-    Write-Host "Leerer Ordner gefunden:" -ForegroundColor Yellow
+    Write-Host "Empty folders found:" -ForegroundColor Yellow
     Write-Host $FolderPath
 
-    $Choice = Read-Host "Ordner löschen? (J/N)"
+    $Choice = Read-Host "Delete folder? (Y/N)"
 
-    if ($Choice -match '^[JjYy]$') {
+    if ($Choice -match '^[Yy]$') {
 
         try {
             $LongFolderPath = Convert-ToLongPath -Path $FolderPath
 
             Remove-Item -LiteralPath $LongFolderPath -Force -ErrorAction Stop
 
-            Write-Host "Gelöscht." -ForegroundColor Green
+            Write-Host "Deleted." -ForegroundColor Green
         }
         catch {
-            Write-Host "Fehler beim Löschen: $FolderPath" -ForegroundColor Red
-            Write-Host "Grund: $($_.Exception.Message)" -ForegroundColor DarkRed
+            Write-Host "Error deleting folder: $FolderPath" -ForegroundColor Red
+            Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor DarkRed
         }
 
     }
     else {
-        Write-Host "Übersprungen." -ForegroundColor Cyan
+        Write-Host "Skipped." -ForegroundColor Cyan
     }
 }
 
 Write-Host ""
-Write-Host "Fertig." -ForegroundColor Green
+Write-Host "Finished." -ForegroundColor Green
