@@ -10,8 +10,8 @@ for empty folders. Each empty folder can be reviewed and deleted individually.
 Author: Nico Bottoni
 Repository: powershell-toolbox
 Category: Filesystem
-Created: 2024-XX-XX
-Last Updated: 2025-11-11
+Created: 2024-12-11
+Last Updated: 2026-07-29
 #>
 
 # Root path to scan
@@ -67,8 +67,8 @@ $EmptyFolders = Get-ChildItem `
             }
         }
         catch {
-            Write-Host "Fehler beim Lesen: $FolderPath" -ForegroundColor Red
-            Write-Host "Grund: $($_.Exception.Message)" -ForegroundColor DarkRed
+            Write-Host "Error reading: $FolderPath" -ForegroundColor Red
+            Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor DarkRed
             return $false
         }
     }
