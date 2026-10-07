@@ -83,11 +83,11 @@ $RunId = $ScriptStart.ToString("yyyyMMdd_HHmmss")
 $ComputerName = $env:COMPUTERNAME
 $ExecutingUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-$AclRaw                = [System.Collections.Generic.List[object]]::new()
-$GroupStructure        = [System.Collections.Generic.List[object]]::new()
-$UserAccess            = [System.Collections.Generic.List[object]]::new()
-$UnresolvedIdentities  = [System.Collections.Generic.List[object]]::new()
-$ScanErrors            = [System.Collections.Generic.List[object]]::new()
+$AclRaw = [System.Collections.Generic.List[object]]::new()
+$GroupStructure = [System.Collections.Generic.List[object]]::new()
+$UserAccess = [System.Collections.Generic.List[object]]::new()
+$UnresolvedIdentities = [System.Collections.Generic.List[object]]::new()
+$ScanErrors = [System.Collections.Generic.List[object]]::new()
 
 $IdentityCache = @{}
 $GroupExpansionCache = @{}
@@ -158,12 +158,12 @@ function Add-ScanError {
     )
 
     $ScanErrors.Add([pscustomobject][ordered]@{
-        Timestamp      = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        Stage          = $Stage
-        Path           = $Path
-        Identity       = $Identity
-        ErrorMessage   = $ErrorRecord.Exception.Message
-        ExceptionType  = $ErrorRecord.Exception.GetType().FullName
+        Timestamp             = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Stage                 = $Stage
+        Path                  = $Path
+        Identity              = $Identity
+        ErrorMessage          = $ErrorRecord.Exception.Message
+        ExceptionType         = $ErrorRecord.Exception.GetType().FullName
         FullyQualifiedErrorId = $ErrorRecord.FullyQualifiedErrorId
     })
 }
@@ -195,7 +195,7 @@ function Add-UnresolvedIdentity {
 }
 
 function Initialize-ExcludedUsers {
-    if (:IsNullOrWhiteSpace($ExcludedUsersCsv)) {
+    if ([string]::IsNullOrWhiteSpace($ExcludedUsersCsv)) {
         return
     }
 
@@ -211,7 +211,7 @@ function Initialize-ExcludedUsers {
         foreach ($PropertyName in @("SamAccountName", "UserPrincipalName", "SID")) {
             if (
                 $Entry.PSObject.Properties.Name -contains $PropertyName -and
-                -not :IsNullOrWhiteSpace($Entry.$PropertyName)
+                -not [string]::IsNullOrWhiteSpace($Entry.$PropertyName)
             ) {
                 $ExcludedUsers[$Entry.$PropertyName.Trim().ToLowerInvariant()] = $true
             }
@@ -230,7 +230,7 @@ function Test-UserExcluded {
 
     foreach ($Value in @($SamAccountName, $UserPrincipalName, $SID)) {
         if (
-            -not :IsNullOrWhiteSpace($Value) -and
+            -not [string]::IsNullOrWhiteSpace($Value) -and
             $ExcludedUsers.ContainsKey($Value.Trim().ToLowerInvariant())
         ) {
             return $true
@@ -247,6 +247,21 @@ function Resolve-AclIdentity {
 
         [string]$Path
     )
+
+    if ([string]::IsNullOrWhiteSpace($IdentityReference)) {
+        return [pscustomobject]@{
+            OriginalIdentity  = $null
+            SID              = $null
+            ObjectType       = "Unknown"
+            Name             = $null
+            SamAccountName   = $null
+            UserPrincipalName = $null
+            DistinguishedName = $null
+            Enabled          = $null
+            DomainObject     = $false
+            ResolutionStatus = "Unresolved"
+        }
+    }
 
     $CacheKey = $IdentityReference.ToLowerInvariant()
 
@@ -269,24 +284,18 @@ function Resolve-AclIdentity {
 
     try {
         $NTAccount = [System.Security.Principal.NTAccount]::new($IdentityReference)
-        $SIDObject = $NTAccount.Translate(
-            [System.Security.Principal.SecurityIdentifier]
-        )
-
+        $SIDObject = $NTAccount.Translate([System.Security.Principal.SecurityIdentifier])
         $Result.SID = $SIDObject.Value
     }
     catch {
-        if ($IdentityReference -match "^S-\d-\d+-.+") {
+        if ($IdentityReference -match '^S-\d-\d+-.+') {
             $Result.SID = $IdentityReference
         }
     }
 
     if ($Result.SID) {
         try {
-            $User = Get-ADUser `
-                -Identity $Result.SID `
-                -Properties DisplayName, UserPrincipalName, Enabled, SID `
-                -ErrorAction Stop
+            $User = Get-ADUser -Identity $Result.SID -Properties DisplayName, UserPrincipalName, Enabled, SID -ErrorAction Stop
 
             $Result.ObjectType        = "User"
             $Result.Name              = $User.Name
@@ -305,10 +314,7 @@ function Resolve-AclIdentity {
         }
 
         try {
-            $Group = Get-ADGroup `
-                -Identity $Result.SID `
-                -Properties GroupCategory, GroupScope, SID `
-                -ErrorAction Stop
+            $Group = Get-ADGroup -Identity $Result.SID -Properties GroupCategory, GroupScope, SID -ErrorAction Stop
 
             $Result.ObjectType        = "Group"
             $Result.Name              = $Group.Name
@@ -325,33 +331,23 @@ function Resolve-AclIdentity {
         }
     }
 
-    switch -Regex ($IdentityReference) {
-        "^(BUILTIN\\|NT AUTHORITY\\|CREATOR OWNER$)" {
-            $Result.ObjectType = "WellKnownPrincipal"
-            $Result.ResolutionStatus = "WellKnownPrincipal"
-        }
-
-        "Everyone$|Jeder$" {
-            $Result.ObjectType = "WellKnownPrincipal"
-            $Result.ResolutionStatus = "WellKnownPrincipal"
-        }
-
-        default {
-            if ($IdentityReference -match "\\") {
-                $Result.ObjectType = "LocalOrForeignPrincipal"
-                $Result.ResolutionStatus = "LocalOrForeignPrincipal"
-            }
-        }
+    if ($IdentityReference -match '^(BUILTIN|NT AUTHORITY|CREATOR OWNER)$') {
+        $Result.ObjectType = "WellKnownPrincipal"
+        $Result.ResolutionStatus = "WellKnownPrincipal"
+    }
+    elseif ($IdentityReference -match '^(Everyone|Jeder)$') {
+        $Result.ObjectType = "WellKnownPrincipal"
+        $Result.ResolutionStatus = "WellKnownPrincipal"
+    }
+    elseif ($IdentityReference -match '\\') {
+        $Result.ObjectType = "LocalOrForeignPrincipal"
+        $Result.ResolutionStatus = "LocalOrForeignPrincipal"
     }
 
     $ResolvedResult = [pscustomobject]$Result
     $IdentityCache[$CacheKey] = $ResolvedResult
 
-    Add-UnresolvedIdentity `
-        -Identity $IdentityReference `
-        -SID $Result.SID `
-        -Reason $Result.ResolutionStatus `
-        -Path $Path
+    Add-UnresolvedIdentity -Identity $IdentityReference -SID $Result.SID -Reason $Result.ResolutionStatus -Path $Path
 
     return $ResolvedResult
 }
@@ -375,18 +371,10 @@ function Expand-AdGroup {
     }
 
     try {
-        $Group = Get-ADGroup `
-            -Identity $GroupIdentity `
-            -Properties SID, GroupCategory, GroupScope `
-            -ErrorAction Stop
+        $Group = Get-ADGroup -Identity $GroupIdentity -Properties SID, GroupCategory, GroupScope -ErrorAction Stop
     }
     catch {
-        Add-ScanError `
-            -Stage "ResolveGroup" `
-            -Path $null `
-            -Identity $GroupIdentity `
-            -ErrorRecord $_
-
+        Add-ScanError -Stage "ResolveGroup" -Path $null -Identity $GroupIdentity -ErrorRecord $_
         return
     }
 
@@ -407,30 +395,20 @@ function Expand-AdGroup {
             IsExcluded              = $false
             Note                    = "Zirkuläre Gruppenverschachtelung erkannt"
         })
-
         return
     }
 
     $LocalVisited = @{}
-
     foreach ($Key in $VisitedGroups.Keys) {
         $LocalVisited[$Key] = $true
     }
-
     $LocalVisited[$GroupSID] = $true
 
     try {
-        $Members = Get-ADGroupMember `
-            -Identity $Group.DistinguishedName `
-            -ErrorAction Stop
+        $Members = Get-ADGroupMember -Identity $Group.DistinguishedName -ErrorAction Stop
     }
     catch {
-        Add-ScanError `
-            -Stage "GetADGroupMember" `
-            -Path $null `
-            -Identity $Group.DistinguishedName `
-            -ErrorRecord $_
-
+        Add-ScanError -Stage "GetADGroupMember" -Path $null -Identity $Group.DistinguishedName -ErrorRecord $_
         return
     }
 
@@ -448,15 +426,9 @@ function Expand-AdGroup {
         switch ($Member.ObjectClass) {
             "user" {
                 try {
-                    $User = Get-ADUser `
-                        -Identity $Member.DistinguishedName `
-                        -Properties DisplayName, UserPrincipalName, Enabled, SID `
-                        -ErrorAction Stop
+                    $User = Get-ADUser -Identity $Member.DistinguishedName -Properties DisplayName, UserPrincipalName, Enabled, SID -ErrorAction Stop
 
-                    $IsExcluded = Test-UserExcluded `
-                        -SamAccountName $User.SamAccountName `
-                        -UserPrincipalName $User.UserPrincipalName `
-                        -SID $User.SID.Value
+                    $IsExcluded = Test-UserExcluded -SamAccountName $User.SamAccountName -UserPrincipalName $User.UserPrincipalName -SID $User.SID.Value
 
                     $GroupStructure.Add([pscustomobject][ordered]@{
                         SourceGroup             = $SourceGroup
@@ -474,11 +446,7 @@ function Expand-AdGroup {
                     })
                 }
                 catch {
-                    Add-ScanError `
-                        -Stage "ResolveGroupUser" `
-                        -Path $null `
-                        -Identity $Member.DistinguishedName `
-                        -ErrorRecord $_
+                    Add-ScanError -Stage "ResolveGroupUser" -Path $null -Identity $Member.DistinguishedName -ErrorRecord $_
                 }
             }
 
@@ -500,11 +468,7 @@ function Expand-AdGroup {
                     Note                    = $null
                 })
 
-                Expand-AdGroup `
-                    -GroupIdentity $Member.DistinguishedName `
-                    -SourceGroup $SourceGroup `
-                    -CurrentGroupPath $ChildPath `
-                    -VisitedGroups $LocalVisited
+                Expand-AdGroup -GroupIdentity $Member.DistinguishedName -SourceGroup $SourceGroup -CurrentGroupPath $ChildPath -VisitedGroups $LocalVisited
             }
 
             "computer" {
@@ -559,34 +523,18 @@ function Get-ExpandedGroupUsers {
 
     $BeforeCount = $GroupStructure.Count
 
-    Expand-AdGroup `
-        -GroupIdentity $GroupSID `
-        -SourceGroup $GroupName `
-        -CurrentGroupPath $GroupName `
-        -VisitedGroups @{}
+    Expand-AdGroup -GroupIdentity $GroupSID -SourceGroup $GroupName -CurrentGroupPath $GroupName -VisitedGroups @{}
 
     $NewRows = @()
 
     if ($GroupStructure.Count -gt $BeforeCount) {
-        $NewRows = @(
-            $GroupStructure[$BeforeCount..($GroupStructure.Count - 1)]
-        )
+        $NewRows = @($GroupStructure[$BeforeCount..($GroupStructure.Count - 1)])
     }
 
     $Users = @(
         $NewRows |
-            Where-Object {
-                $_.MemberType -eq "User"
-            } |
-            Select-Object `
-                MemberName,
-                MemberSamAccountName,
-                MemberUserPrincipalName,
-                MemberSID,
-                MemberEnabled,
-                GroupPath,
-                IsExcluded `
-                -Unique
+            Where-Object { $_.MemberType -eq "User" } |
+            Select-Object MemberName, MemberSamAccountName, MemberUserPrincipalName, MemberSID, MemberEnabled, GroupPath, IsExcluded -Unique
     )
 
     $GroupExpansionCache[$GroupSID] = $Users
@@ -621,10 +569,7 @@ function Add-UserAccessRow {
         [string]$GroupPath
     )
 
-    $IsExcluded = Test-UserExcluded `
-        -SamAccountName $SamAccountName `
-        -UserPrincipalName $UserPrincipalName `
-        -SID $UserSID
+    $IsExcluded = Test-UserExcluded -SamAccountName $SamAccountName -UserPrincipalName $UserPrincipalName -SID $UserSID
 
     if ($IsExcluded) {
         return
@@ -635,24 +580,24 @@ function Add-UserAccessRow {
     }
 
     $UserAccess.Add([pscustomobject][ordered]@{
-        ItemPath             = $AclRow.ItemPath
-        ItemType             = $AclRow.ItemType
-        UserName             = $UserName
-        SamAccountName       = $SamAccountName
-        UserPrincipalName    = $UserPrincipalName
-        UserSID              = $UserSID
-        UserEnabled          = $Enabled
-        AssignmentType       = $AssignmentType
-        PermissionSource     = $PermissionSource
-        PermissionSourceSID  = $PermissionSourceSID
-        GroupPath            = $GroupPath
-        AccessControlType    = $AclRow.AccessControlType
-        FileSystemRights     = $AclRow.FileSystemRights
-        RightsMask           = $AclRow.RightsMask
-        IsInherited          = $AclRow.IsInherited
-        InheritanceFlags     = $AclRow.InheritanceFlags
-        PropagationFlags     = $AclRow.PropagationFlags
-        Owner                = $AclRow.Owner
+        ItemPath            = $AclRow.ItemPath
+        ItemType            = $AclRow.ItemType
+        UserName            = $UserName
+        SamAccountName      = $SamAccountName
+        UserPrincipalName   = $UserPrincipalName
+        UserSID             = $UserSID
+        UserEnabled         = $Enabled
+        AssignmentType      = $AssignmentType
+        PermissionSource    = $PermissionSource
+        PermissionSourceSID = $PermissionSourceSID
+        GroupPath           = $GroupPath
+        AccessControlType   = $AclRow.AccessControlType
+        FileSystemRights    = $AclRow.FileSystemRights
+        RightsMask          = $AclRow.RightsMask
+        IsInherited         = $AclRow.IsInherited
+        InheritanceFlags    = $AclRow.InheritanceFlags
+        PropagationFlags    = $AclRow.PropagationFlags
+        Owner               = $AclRow.Owner
     })
 }
 
@@ -669,85 +614,76 @@ function Process-FileSystemItem {
         $Acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop
     }
     catch {
-        Add-ScanError `
-            -Stage "GetAcl" `
-            -Path $Item.FullName `
-            -Identity $null `
-            -ErrorRecord $_
-
+        Add-ScanError -Stage "GetAcl" -Path $Item.FullName -Identity $null -ErrorRecord $_
         return
     }
 
     foreach ($AccessRule in $Acl.Access) {
         $IdentityName = $AccessRule.IdentityReference.Value
-        $ResolvedIdentity = Resolve-AclIdentity `
-            -IdentityReference $IdentityName `
-            -Path $Item.FullName
-
+        $ResolvedIdentity = Resolve-AclIdentity -IdentityReference $IdentityName -Path $Item.FullName
         $RightsMask = Get-RightsMask -Rights $AccessRule.FileSystemRights
 
         $AclRow = [pscustomobject][ordered]@{
-            ItemPath           = $Item.FullName
-            ItemType           = $ItemType
-            Owner              = $Acl.Owner
-            IdentityReference  = $IdentityName
-            ResolvedName       = $ResolvedIdentity.Name
-            ResolvedType       = $ResolvedIdentity.ObjectType
-            IdentitySID        = $ResolvedIdentity.SID
-            ResolutionStatus   = $ResolvedIdentity.ResolutionStatus
-            AccessControlType  = $AccessRule.AccessControlType.ToString()
-            FileSystemRights   = $AccessRule.FileSystemRights.ToString()
-            RightsMask         = $RightsMask
-            IsInherited        = $AccessRule.IsInherited
-            InheritanceFlags   = $AccessRule.InheritanceFlags.ToString()
-            PropagationFlags   = $AccessRule.PropagationFlags.ToString()
-            Sddl               = $Acl.Sddl
+            ItemPath          = $Item.FullName
+            ItemType          = $ItemType
+            Owner             = $Acl.Owner
+            IdentityReference = $IdentityName
+            ResolvedName      = $ResolvedIdentity.Name
+            ResolvedType      = $ResolvedIdentity.ObjectType
+            IdentitySID       = $ResolvedIdentity.SID
+            ResolutionStatus  = $ResolvedIdentity.ResolutionStatus
+            AccessControlType = $AccessRule.AccessControlType.ToString()
+            FileSystemRights  = $AccessRule.FileSystemRights.ToString()
+            RightsMask        = $RightsMask
+            IsInherited       = $AccessRule.IsInherited
+            InheritanceFlags  = $AccessRule.InheritanceFlags.ToString()
+            PropagationFlags  = $AccessRule.PropagationFlags.ToString()
+            Sddl              = $Acl.Sddl
         }
 
         $AclRaw.Add($AclRow)
 
         switch ($ResolvedIdentity.ObjectType) {
             "User" {
-                Add-UserAccessRow `
-                    -AclRow $AclRow `
-                    -UserName $ResolvedIdentity.Name `
-                    -SamAccountName $ResolvedIdentity.SamAccountName `
-                    -UserPrincipalName $ResolvedIdentity.UserPrincipalName `
-                    -UserSID $ResolvedIdentity.SID `
-                    -Enabled $ResolvedIdentity.Enabled `
-                    -AssignmentType "Direct" `
-                    -PermissionSource $IdentityName `
-                    -PermissionSourceSID $ResolvedIdentity.SID `
-                    -GroupPath $null
+                Add-UserAccessRow -AclRow $AclRow -UserName $ResolvedIdentity.Name -SamAccountName $ResolvedIdentity.SamAccountName -UserPrincipalName $ResolvedIdentity.UserPrincipalName -UserSID $ResolvedIdentity.SID -Enabled $ResolvedIdentity.Enabled -AssignmentType "Direct" -PermissionSource $IdentityName -PermissionSourceSID $ResolvedIdentity.SID -GroupPath $null
             }
 
             "Group" {
-                $GroupUsers = Get-ExpandedGroupUsers `
-                    -GroupSID $ResolvedIdentity.SID `
-                    -GroupName $ResolvedIdentity.Name
+                $GroupUsers = Get-ExpandedGroupUsers -GroupSID $ResolvedIdentity.SID -GroupName $ResolvedIdentity.Name
 
                 foreach ($GroupUser in $GroupUsers) {
-                    Add-UserAccessRow `
-                        -AclRow $AclRow `
-                        -UserName $GroupUser.MemberName `
-                        -SamAccountName $GroupUser.MemberSamAccountName `
-                        -UserPrincipalName $GroupUser.MemberUserPrincipalName `
-                        -UserSID $GroupUser.MemberSID `
-                        -Enabled $GroupUser.MemberEnabled `
-                        -AssignmentType "Group" `
-                        -PermissionSource $ResolvedIdentity.Name `
-                        -PermissionSourceSID $ResolvedIdentity.SID `
-                        -GroupPath $GroupUser.GroupPath
+                    Add-UserAccessRow -AclRow $AclRow -UserName $GroupUser.MemberName -SamAccountName $GroupUser.MemberSamAccountName -UserPrincipalName $GroupUser.MemberUserPrincipalName -UserSID $GroupUser.MemberSID -Enabled $GroupUser.MemberEnabled -AssignmentType "Group" -PermissionSource $ResolvedIdentity.Name -PermissionSourceSID $ResolvedIdentity.SID -GroupPath $GroupUser.GroupPath
                 }
             }
 
             default {
                 # Well-known, lokale und nicht auflösbare Identitäten
-                # werden im Rohbericht und im Bericht für nicht
-                # auflösbare Identitäten dokumentiert.
+                # werden im Rohbericht und im Bericht für nicht auflösbare Identitäten dokumentiert.
             }
         }
     }
+}
+
+function Get-FileSha256 {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    $FileBytes = [System.IO.File]::ReadAllBytes($Path)
+    $Hash = [System.Security.Cryptography.SHA256]::Create()
+    $HashBytes = $Hash.ComputeHash($FileBytes)
+    $Builder = [System.Text.StringBuilder]::new()
+
+    foreach ($Byte in $HashBytes) {
+        [void]$Builder.Append($Byte.ToString("x2"))
+    }
+
+    return $Builder.ToString()
 }
 
 # ------------------------------------------------------------
@@ -765,10 +701,7 @@ if (-not (Test-Path -LiteralPath $RootPath)) {
 }
 
 if (-not (Test-Path -LiteralPath $OutputPath)) {
-    New-Item `
-        -Path $OutputPath `
-        -ItemType Directory `
-        -Force | Out-Null
+    New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
 }
 
 Initialize-ExcludedUsers
@@ -782,12 +715,7 @@ try {
     Process-FileSystemItem -Item $RootItem -ItemType "Directory"
 }
 catch {
-    Add-ScanError `
-        -Stage "GetRootItem" `
-        -Path $RootPath `
-        -Identity $null `
-        -ErrorRecord $_
-
+    Add-ScanError -Stage "GetRootItem" -Path $RootPath -Identity $null -ErrorRecord $_
     throw "Das Root-Verzeichnis konnte nicht ausgewertet werden: $RootPath"
 }
 
@@ -799,35 +727,19 @@ Write-Log "Ermittle Unterverzeichnisse."
 
 try {
     $Directories = @(
-        Get-ChildItem `
-            -LiteralPath $RootPath `
-            -Directory `
-            -Recurse `
-            -Force `
-            -ErrorAction SilentlyContinue `
-            -ErrorVariable DirectoryEnumerationErrors
+        Get-ChildItem -LiteralPath $RootPath -Directory -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable DirectoryEnumerationErrors
     )
 
     foreach ($EnumerationError in $DirectoryEnumerationErrors) {
-        Add-ScanError `
-            -Stage "EnumerateDirectory" `
-            -Path $EnumerationError.TargetObject `
-            -Identity $null `
-            -ErrorRecord $EnumerationError
+        Add-ScanError -Stage "EnumerateDirectory" -Path $EnumerationError.TargetObject -Identity $null -ErrorRecord $EnumerationError
     }
 }
 catch {
-    Add-ScanError `
-        -Stage "EnumerateDirectories" `
-        -Path $RootPath `
-        -Identity $null `
-        -ErrorRecord $_
-
+    Add-ScanError -Stage "EnumerateDirectories" -Path $RootPath -Identity $null -ErrorRecord $_
     $Directories = @()
 }
 
 $DirectoryNumber = 0
-
 foreach ($Directory in $Directories) {
     $DirectoryNumber++
 
@@ -835,9 +747,7 @@ foreach ($Directory in $Directories) {
         Write-Log "$DirectoryNumber von $($Directories.Count) Verzeichnissen verarbeitet."
     }
 
-    Process-FileSystemItem `
-        -Item $Directory `
-        -ItemType "Directory"
+    Process-FileSystemItem -Item $Directory -ItemType "Directory"
 }
 
 # ------------------------------------------------------------
@@ -851,35 +761,19 @@ if ($IncludeFiles) {
 
     try {
         $Files = @(
-            Get-ChildItem `
-                -LiteralPath $RootPath `
-                -File `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue `
-                -ErrorVariable FileEnumerationErrors
+            Get-ChildItem -LiteralPath $RootPath -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable FileEnumerationErrors
         )
 
         foreach ($EnumerationError in $FileEnumerationErrors) {
-            Add-ScanError `
-                -Stage "EnumerateFile" `
-                -Path $EnumerationError.TargetObject `
-                -Identity $null `
-                -ErrorRecord $EnumerationError
+            Add-ScanError -Stage "EnumerateFile" -Path $EnumerationError.TargetObject -Identity $null -ErrorRecord $EnumerationError
         }
     }
     catch {
-        Add-ScanError `
-            -Stage "EnumerateFiles" `
-            -Path $RootPath `
-            -Identity $null `
-            -ErrorRecord $_
-
+        Add-ScanError -Stage "EnumerateFiles" -Path $RootPath -Identity $null -ErrorRecord $_
         $Files = @()
     }
 
     $FileNumber = 0
-
     foreach ($File in $Files) {
         $FileNumber++
 
@@ -887,9 +781,7 @@ if ($IncludeFiles) {
             Write-Log "$FileNumber von $($Files.Count) Dateien verarbeitet."
         }
 
-        Process-FileSystemItem `
-            -Item $File `
-            -ItemType "File"
+        Process-FileSystemItem -Item $File -ItemType "File"
     }
 }
 
@@ -901,8 +793,7 @@ Write-Log "Erstelle konsolidierte Benutzerübersicht."
 
 $UserEffectiveSummary = [System.Collections.Generic.List[object]]::new()
 
-$GroupedUserAccess = $UserAccess |
-    Group-Object -Property UserSID, ItemPath
+$GroupedUserAccess = $UserAccess | Group-Object -Property UserSID, ItemPath
 
 foreach ($AccessGroup in $GroupedUserAccess) {
     $Rows = @($AccessGroup.Group)
@@ -944,22 +835,22 @@ foreach ($AccessGroup in $GroupedUserAccess) {
     ) -join " | "
 
     $UserEffectiveSummary.Add([pscustomobject][ordered]@{
-        ItemPath             = $Rows[0].ItemPath
-        ItemType             = $Rows[0].ItemType
-        UserName             = $Rows[0].UserName
-        SamAccountName       = $Rows[0].SamAccountName
-        UserPrincipalName    = $Rows[0].UserPrincipalName
-        UserSID              = $Rows[0].UserSID
-        UserEnabled          = $Rows[0].UserEnabled
-        AllowRights          = Convert-RightsMaskToText -Mask $AllowMask
-        AllowMask            = $AllowMask
-        DenyRights           = Convert-RightsMaskToText -Mask $DenyMask
-        DenyMask             = $DenyMask
-        DerivedRights        = Convert-RightsMaskToText -Mask $DerivedMask
-        DerivedRightsMask    = $DerivedMask
-        PermissionSources    = $PermissionSources
-        AssignmentCount      = $Rows.Count
-        EvaluationNote       = "Technische NTFS-ACL-Ableitung; kein vollständiger Windows-Benutzertoken-Test"
+        ItemPath          = $Rows[0].ItemPath
+        ItemType          = $Rows[0].ItemType
+        UserName          = $Rows[0].UserName
+        SamAccountName    = $Rows[0].SamAccountName
+        UserPrincipalName = $Rows[0].UserPrincipalName
+        UserSID           = $Rows[0].UserSID
+        UserEnabled       = $Rows[0].UserEnabled
+        AllowRights       = Convert-RightsMaskToText -Mask $AllowMask
+        AllowMask         = $AllowMask
+        DenyRights        = Convert-RightsMaskToText -Mask $DenyMask
+        DenyMask          = $DenyMask
+        DerivedRights     = Convert-RightsMaskToText -Mask $DerivedMask
+        DerivedRightsMask = $DerivedMask
+        PermissionSources = $PermissionSources
+        AssignmentCount   = $Rows.Count
+        EvaluationNote     = "Technische NTFS-ACL-Ableitung; kein vollständiger Windows-Benutzertoken-Test"
     })
 }
 
@@ -970,144 +861,80 @@ foreach ($AccessGroup in $GroupedUserAccess) {
 Write-Log "Exportiere Ergebnisse."
 
 $OutputFiles = [ordered]@{
-    AclRaw = Join-Path $OutputPath "01_ACL_Raw.csv"
-    GroupStructure = Join-Path $OutputPath "02_GroupStructure.csv"
-    UserAccess = Join-Path $OutputPath "03_UserAccess.csv"
+    AclRaw               = Join-Path $OutputPath "01_ACL_Raw.csv"
+    GroupStructure       = Join-Path $OutputPath "02_GroupStructure.csv"
+    UserAccess           = Join-Path $OutputPath "03_UserAccess.csv"
     UserEffectiveSummary = Join-Path $OutputPath "04_UserEffectiveSummary.csv"
     UnresolvedIdentities = Join-Path $OutputPath "05_UnresolvedIdentities.csv"
-    ScanErrors = Join-Path $OutputPath "06_ScanErrors.csv"
-    Manifest = Join-Path $OutputPath "AuditManifest.json"
+    ScanErrors           = Join-Path $OutputPath "06_ScanErrors.csv"
+    Manifest             = Join-Path $OutputPath "AuditManifest.json"
 }
 
 $AclRaw |
     Sort-Object ItemPath, IdentityReference, AccessControlType |
-    Export-Csv `
-        -LiteralPath $OutputFiles.AclRaw `
-        -Delimiter $CsvDelimiter `
-        -NoTypeInformation `
-        -Encoding UTF8
+    Export-Csv -LiteralPath $OutputFiles.AclRaw -Delimiter $CsvDelimiter -NoTypeInformation -Encoding UTF8
 
 $GroupStructure |
     Sort-Object SourceGroup, GroupPath, MemberType, MemberSamAccountName |
-    Export-Csv `
-        -LiteralPath $OutputFiles.GroupStructure `
-        -Delimiter $CsvDelimiter `
-        -NoTypeInformation `
-        -Encoding UTF8
+    Export-Csv -LiteralPath $OutputFiles.GroupStructure -Delimiter $CsvDelimiter -NoTypeInformation -Encoding UTF8
 
 $UserAccess |
     Sort-Object SamAccountName, ItemPath, AccessControlType, PermissionSource |
-    Export-Csv `
-        -LiteralPath $OutputFiles.UserAccess `
-        -Delimiter $CsvDelimiter `
-        -NoTypeInformation `
-        -Encoding UTF8
+    Export-Csv -LiteralPath $OutputFiles.UserAccess -Delimiter $CsvDelimiter -NoTypeInformation -Encoding UTF8
 
 $UserEffectiveSummary |
-    Sort-Object SamAccountName, ItemPath |
-    Export-Csv `
-        -LiteralPath $OutputFiles.UserEffectiveSummary `
-        -Delimiter $CsvDelimiter `
-        -NoTypeInformation `
-        -Encoding UTF8
+    Sort-Object ItemPath, UserName |
+    Export-Csv -LiteralPath $OutputFiles.UserEffectiveSummary -Delimiter $CsvDelimiter -NoTypeInformation -Encoding UTF8
 
 $UnresolvedIdentities |
-    Sort-Object Identity, Path -Unique |
-    Export-Csv `
-        -LiteralPath $OutputFiles.UnresolvedIdentities `
-        -Delimiter $CsvDelimiter `
-        -NoTypeInformation `
-        -Encoding UTF8
+    Sort-Object Identity, Path |
+    Export-Csv -LiteralPath $OutputFiles.UnresolvedIdentities -Delimiter $CsvDelimiter -NoTypeInformation -Encoding UTF8
 
 $ScanErrors |
-    Sort-Object Stage, Path |
-    Export-Csv `
-        -LiteralPath $OutputFiles.ScanErrors `
-        -Delimiter $CsvDelimiter `
-        -NoTypeInformation `
-        -Encoding UTF8
+    Sort-Object Timestamp, Stage, Path |
+    Export-Csv -LiteralPath $OutputFiles.ScanErrors -Delimiter $CsvDelimiter -NoTypeInformation -Encoding UTF8
 
-# ------------------------------------------------------------
-# Prüfsummen und Manifest
-# ------------------------------------------------------------
-
-$ScriptEnd = Get-Date
-
-$ResultFileHashes = foreach ($FilePath in @(
-    $OutputFiles.AclRaw,
-    $OutputFiles.GroupStructure,
-    $OutputFiles.UserAccess,
-    $OutputFiles.UserEffectiveSummary,
-    $OutputFiles.UnresolvedIdentities,
-    $OutputFiles.ScanErrors
-)) {
-    if (Test-Path -LiteralPath $FilePath) {
-        $Hash = Get-FileHash `
-            -LiteralPath $FilePath `
-            -Algorithm SHA256
-
-        [ordered]@{
-            FileName = Split-Path $FilePath -Leaf
-            SHA256   = $Hash.Hash
-            Length   = (Get-Item -LiteralPath $FilePath).Length
-        }
+$ManifestData = [ordered]@{
+    RunId             = $RunId
+    GeneratedAtUtc    = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+    GeneratedAtLocal  = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+    RootPath          = $RootPath
+    OutputPath        = $OutputPath
+    ComputerName      = $ComputerName
+    ExecutingUser     = $ExecutingUser
+    IncludeFiles      = $IncludeFiles.IsPresent
+    ExcludeDisabledUsers = $ExcludeDisabledUsers.IsPresent
+    CsvDelimiter      = $CsvDelimiter
+    Files = [ordered]@{
+        AclRaw               = Get-FileSha256 -Path $OutputFiles.AclRaw
+        GroupStructure       = Get-FileSha256 -Path $OutputFiles.GroupStructure
+        UserAccess           = Get-FileSha256 -Path $OutputFiles.UserAccess
+        UserEffectiveSummary = Get-FileSha256 -Path $OutputFiles.UserEffectiveSummary
+        UnresolvedIdentities = Get-FileSha256 -Path $OutputFiles.UnresolvedIdentities
+        ScanErrors           = Get-FileSha256 -Path $OutputFiles.ScanErrors
     }
-}
-
-$Manifest = [ordered]@{
-    AuditName = "WVAG Berechtigungspruefung 2026"
-    RunId = $RunId
-    ScriptStart = $ScriptStart.ToString("o")
-    ScriptEnd = $ScriptEnd.ToString("o")
-    DurationSeconds = :Round(
-        ($ScriptEnd - $ScriptStart).TotalSeconds,
-        2
-    )
-    ExecutingUser = $ExecutingUser
-    ComputerName = $ComputerName
-    PowerShellVersion = $PSVersionTable.PSVersion.ToString()
-    RootPath = $RootPath
-    OutputPath = $OutputPath
-    IncludeFiles = [bool]$IncludeFiles
-    ExcludeDisabledUsers = [bool]$ExcludeDisabledUsers
-    ExcludedUsersCsv = $ExcludedUsersCsv
-    CsvDelimiter = [string]$CsvDelimiter
     Counts = [ordered]@{
-        DirectoriesEnumerated = $Directories.Count + 1
-        FilesEnumerated = $Files.Count
-        AclRows = $AclRaw.Count
-        GroupStructureRows = $GroupStructure.Count
-        UserAccessRows = $UserAccess.Count
-        UserEffectiveSummaryRows = $UserEffectiveSummary.Count
-        UnresolvedIdentityRows = $UnresolvedIdentities.Count
-        ScanErrorRows = $ScanErrors.Count
+        AclRawCount          = $AclRaw.Count
+        GroupStructureCount  = $GroupStructure.Count
+        UserAccessCount      = $UserAccess.Count
+        SummaryCount         = $UserEffectiveSummary.Count
+        UnresolvedCount      = $UnresolvedIdentities.Count
+        ScanErrorsCount      = $ScanErrors.Count
     }
-    Limitations = @(
-        "SMB-Share-Berechtigungen sind nicht enthalten.",
-        "Lokale Gruppen auf entfernten Fileservern werden nicht aufgelöst.",
-        "Well-known Principals werden dokumentiert, aber nicht auf einzelne Benutzer expandiert.",
-        "Dynamic Access Control und Central Access Policies sind nicht enthalten.",
-        "DerivedRights ist eine ACL-Ableitung und kein vollständiger Windows Effective Access Token-Test."
-    )
-    Files = $ResultFileHashes
 }
 
-$Manifest |
-    ConvertTo-Json -Depth 10 |
-    Set-Content `
-        -LiteralPath $OutputFiles.Manifest `
-        -Encoding UTF8
+$ManifestData | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputFiles.Manifest -Encoding UTF8
 
-$ManifestHash = Get-FileHash `
-    -LiteralPath $OutputFiles.Manifest `
-    -Algorithm SHA256
+Write-Log "Audit abgeschlossen. Ergebnisse in $OutputPath"
 
-Write-Log "Berechtigungsprüfung abgeschlossen."
-Write-Log "Ausgabeverzeichnis: $OutputPath"
-Write-Log "Verzeichnisse: $($Directories.Count + 1)"
-Write-Log "Dateien: $($Files.Count)"
-Write-Log "ACL-Einträge: $($AclRaw.Count)"
-Write-Log "Benutzerzugriffszeilen: $($UserAccess.Count)"
-Write-Log "Nicht auflösbare Identitäten: $($UnresolvedIdentities.Count)"
-Write-Log "Fehler: $($ScanErrors.Count)"
-Write-Log "Manifest SHA-256: $($ManifestHash.Hash)"
+return [pscustomobject]@{
+    RootPath          = $RootPath
+    OutputPath        = $OutputPath
+    AclRawCount       = $AclRaw.Count
+    GroupStructureCount = $GroupStructure.Count
+    UserAccessCount   = $UserAccess.Count
+    SummaryCount      = $UserEffectiveSummary.Count
+    UnresolvedCount    = $UnresolvedIdentities.Count
+    ScanErrorsCount   = $ScanErrors.Count
+    ManifestFile      = $OutputFiles.Manifest
+}
