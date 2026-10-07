@@ -47,7 +47,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputPath = "C:\Temp\WVAG_Berechtigungspruefung_2026",
+    [string]$OutputPath = "C:\Temp\Berechtigungspruefung",
 
     # Standardmäßig werden nur Ordner geprüft.
     # Mit diesem Schalter werden zusätzlich alle Dateien ausgewertet.
