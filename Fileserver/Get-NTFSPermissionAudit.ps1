@@ -92,6 +92,7 @@ $ScanErrors = [System.Collections.Generic.List[object]]::new()
 $IdentityCache = @{}
 $GroupExpansionCache = @{}
 $ExcludedUsers = @{}
+$script:UnresolvedIdentityKeys = @{}
 
 function Write-Log {
     param(
