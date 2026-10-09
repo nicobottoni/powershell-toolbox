@@ -43,11 +43,11 @@ param(
     # \\server\share oder \\server\share\Data
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$RootPath = "V:\",
+    [string]$RootPath = "\\konzfs1821.wgs.wuerth.com\KONZFS1821_vol1\1459\Data",
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputPath = "C:\Temp\Berechtigungspruefung",
+    [string]$OutputPath = "C:\Management\Fileserver\Berechtigungspruefung",
 
     # Standardmäßig werden nur Ordner geprüft.
     # Mit diesem Schalter werden zusätzlich alle Dateien ausgewertet.
@@ -63,6 +63,11 @@ param(
     # Standardmäßig deaktivierte Benutzer nicht in UserAccess aufnehmen.
     [Parameter(Mandatory = $false)]
     [switch]$ExcludeDisabledUsers,
+
+    # Nur Root-Verzeichnis, Ordner mit expliziten ACEs
+    # oder Ordner mit deaktivierter Vererbung auswerten.
+    [Parameter(Mandatory = $false)]
+    [switch]$OnlyPermissionBoundaries,
 
     # CSV-Trennzeichen
     [Parameter(Mandatory = $false)]
@@ -92,7 +97,18 @@ $ScanErrors = [System.Collections.Generic.List[object]]::new()
 $IdentityCache = @{}
 $GroupExpansionCache = @{}
 $ExcludedUsers = @{}
+$ExcludedAclGroups = @(
+    'WGS\grp1459-Administrators'
+    'WGS\grp1459-AccountOperators'
+    'WGS\grpKONZ-Administrators'
+    'WGS\grpKONZ-KONZFS1821_vol1_Admin'
+    'WGS\saKONZCommvaultShare'
+)
 $script:UnresolvedIdentityKeys = @{}
+$PermissionBoundaryCount = 0
+$InheritedOnlySkippedCount = 0
+$ProtectedAclCount = 0
+$ExplicitAclCount = 0
 
 function Write-Log {
     param(
@@ -608,7 +624,9 @@ function Process-FileSystemItem {
         [System.IO.FileSystemInfo]$Item,
 
         [Parameter(Mandatory)]
-        [string]$ItemType
+        [string]$ItemType,
+
+        [switch]$IsRoot
     )
 
     try {
@@ -619,8 +637,54 @@ function Process-FileSystemItem {
         return
     }
 
-    foreach ($AccessRule in $Acl.Access) {
+    $ExplicitAccessRules = @(
+    $Acl.Access | Where-Object {
+        -not $_.IsInherited
+    }
+    )
+
+    $InheritanceProtected = [bool]$Acl.AreAccessRulesProtected
+
+    $HasExplicitAccessRules = $ExplicitAccessRules.Count -gt 0
+
+    $IsPermissionBoundary = (
+        $IsRoot.IsPresent -or
+        $InheritanceProtected -or
+        $HasExplicitAccessRules
+)
+
+if (
+    $OnlyPermissionBoundaries.IsPresent -and
+    -not $IsPermissionBoundary
+) {
+    $script:InheritedOnlySkippedCount++
+    return
+}
+
+if ($IsPermissionBoundary) {
+    $script:PermissionBoundaryCount++
+}
+
+if ($InheritanceProtected) {
+    $script:ProtectedAclCount++
+}
+
+if ($HasExplicitAccessRules) {
+    $script:ExplicitAclCount++
+}
+
+if ($IsPermissionBoundary) {
+    $AccessRulesToProcess = @($Acl.Access)
+}
+else {
+    $AccessRulesToProcess = @()
+}
+
+    foreach ($AccessRule in $AccessRulesToProcess) {
         $IdentityName = $AccessRule.IdentityReference.Value
+        if ($ExcludedAclGroups -contains $IdentityName) {
+            continue
+        }
         $ResolvedIdentity = Resolve-AclIdentity -IdentityReference $IdentityName -Path $Item.FullName
         $RightsMask = Get-RightsMask -Rights $AccessRule.FileSystemRights
 
@@ -713,11 +777,22 @@ Initialize-ExcludedUsers
 
 try {
     $RootItem = Get-Item -LiteralPath $RootPath -Force -ErrorAction Stop
-    Process-FileSystemItem -Item $RootItem -ItemType "Directory"
+    Process-FileSystemItem `
+        -Item $RootItem `
+        -ItemType "Directory" `
+        -IsRoot
 }
 catch {
+    Write-Host ""
+    Write-Host "===== ORIGINAL ERROR =====" -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host $_.ScriptStackTrace -ForegroundColor Cyan
+    Write-Host ""
+
     Add-ScanError -Stage "GetRootItem" -Path $RootPath -Identity $null -ErrorRecord $_
-    throw "Das Root-Verzeichnis konnte nicht ausgewertet werden: $RootPath"
+
+    throw
 }
 
 # ------------------------------------------------------------
@@ -921,21 +996,37 @@ $ManifestData = [ordered]@{
         SummaryCount         = $UserEffectiveSummary.Count
         UnresolvedCount      = $UnresolvedIdentities.Count
         ScanErrorsCount      = $ScanErrors.Count
+
+        PermissionBoundaryCount = $PermissionBoundaryCount
+        InheritedOnlySkippedCount = $InheritedOnlySkippedCount
+        ProtectedAclCount = $ProtectedAclCount
+        ExplicitAclCount = $ExplicitAclCount
     }
 }
 
 $ManifestData | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputFiles.Manifest -Encoding UTF8
 
+Write-Log "Permission Boundaries: $PermissionBoundaryCount"
+Write-Log "Inherited skipped: $InheritedOnlySkippedCount"
+Write-Log "Protected ACLs: $ProtectedAclCount"
+Write-Log "Explicit ACLs: $ExplicitAclCount"
+
 Write-Log "Audit abgeschlossen. Ergebnisse in $OutputPath"
 
 return [pscustomobject]@{
-    RootPath          = $RootPath
-    OutputPath        = $OutputPath
-    AclRawCount       = $AclRaw.Count
+    RootPath = $RootPath
+    OutputPath = $OutputPath
+    AclRawCount = $AclRaw.Count
     GroupStructureCount = $GroupStructure.Count
-    UserAccessCount   = $UserAccess.Count
-    SummaryCount      = $UserEffectiveSummary.Count
-    UnresolvedCount    = $UnresolvedIdentities.Count
-    ScanErrorsCount   = $ScanErrors.Count
-    ManifestFile      = $OutputFiles.Manifest
+    UserAccessCount = $UserAccess.Count
+    SummaryCount = $UserEffectiveSummary.Count
+    UnresolvedCount = $UnresolvedIdentities.Count
+    ScanErrorsCount = $ScanErrors.Count
+
+    PermissionBoundaryCount = $PermissionBoundaryCount
+    InheritedOnlySkippedCount = $InheritedOnlySkippedCount
+    ProtectedAclCount = $ProtectedAclCount
+    ExplicitAclCount = $ExplicitAclCount
+
+    ManifestFile = $OutputFiles.Manifest
 }
