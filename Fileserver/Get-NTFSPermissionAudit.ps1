@@ -43,11 +43,11 @@ param(
     # \\server\share oder \\server\share\Data
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$RootPath = "\\konzfs1821.wgs.wuerth.com\KONZFS1821_vol1\1459\Data",
+    [string]$RootPath = "\\server\share\wantedfolder",
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputPath = "C:\Management\Fileserver\Berechtigungspruefung",
+    [string]$OutputPath = "C:\temp\Berechtigungspruefung",
 
     # Standardmäßig werden nur Ordner geprüft.
     # Mit diesem Schalter werden zusätzlich alle Dateien ausgewertet.
@@ -98,11 +98,7 @@ $IdentityCache = @{}
 $GroupExpansionCache = @{}
 $ExcludedUsers = @{}
 $ExcludedAclGroups = @(
-    'WGS\grp1459-Administrators'
-    'WGS\grp1459-AccountOperators'
-    'WGS\grpKONZ-Administrators'
-    'WGS\grpKONZ-KONZFS1821_vol1_Admin'
-    'WGS\saKONZCommvaultShare'
+    'domain\group'
 )
 $script:UnresolvedIdentityKeys = @{}
 $PermissionBoundaryCount = 0
