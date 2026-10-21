@@ -65,7 +65,10 @@ param(
     [switch]$OnlyPermissionBoundaries,
 
     [Parameter(Mandatory = $false)]
-    [string[]]$ExcludedAclGroups = @(),
+    [string[]]$ExcludedAclGroups = @(
+        'domain\group1',
+        'domain\group2'
+        ),
 
     [Parameter(Mandatory = $false)]
     [char]$CsvDelimiter = ';'
