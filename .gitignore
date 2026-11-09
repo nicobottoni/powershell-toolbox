@@ -10,6 +10,9 @@
 *.json
 *.xml
 
+# Allow sanitized example CSV
+!UniversalPrint-Locations.csv
+
 # Secrets and local configuration
 *.secret.ps1
 *.local.ps1
