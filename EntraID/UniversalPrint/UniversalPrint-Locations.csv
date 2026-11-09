@@ -1,0 +1,3 @@
+PrinterName;Latitude;Longitude;AltitudeInMeters;Organization;Subdivision;Site;SubUnit;Building;Floor;FloorDescription;RoomName;RoomDescription;StreetAddress;City;StateOrProvince;PostalCode;CountryOrRegion
+PRINTER-001;;;;Example Corp;;Zurich;;Building A;2;Second Floor;201;;Example Street 1;Zurich;;8000;Switzerland
+PRINTER-002;;;;Example Corp;;Bern;;Building B;1;First Floor;105;;Example Street 2;Bern;;3000;Switzerland
