@@ -1,0 +1,710 @@
+<#
+.SYNOPSIS
+    Finds potential orphaned SIDs in folder NTFS permissions.
+
+.DESCRIPTION
+    Recursively scans a local folder or UNC path, reads each folder ACL, and
+    reports access rules whose SID cannot be translated to an NT account.
+
+    The scan is read-only. It never changes permissions. Translation failures
+    can also be caused by unavailable domains, broken trusts, DNS issues, or
+    temporary domain-controller connectivity problems.
+
+.PARAMETER RootPath
+    Root folder to scan. If omitted, the script prompts for it.
+
+.PARAMETER CsvPath
+    Optional output path for the findings CSV. If omitted, a Save As dialog is
+    displayed after the scan unless NoCsvPrompt is used.
+
+.PARAMETER NoCsvPrompt
+    Do not display the Save As dialog when CsvPath is omitted.
+
+.PARAMETER DomainAccountSidsOnly
+    Only report unresolved SIDs matching S-1-5-21-...-RID.
+
+.PARAMETER NoProgress
+    Hide the progress display.
+
+.PARAMETER PassThru
+    Write finding objects to the pipeline.
+
+.EXAMPLE
+    .\Find-OrphanedNtfsSids.ps1
+
+.EXAMPLE
+    .\Find-OrphanedNtfsSids.ps1 -RootPath "\\server\share" -CsvPath "C:\Reports\OrphanedSids.csv"
+
+.NOTES
+    Requires Windows and PowerShell 7 or later. When started in Windows
+    PowerShell 5.1 or ISE, the script relaunches itself in PowerShell 7.
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Position = 0)]
+    [string]$RootPath,
+
+    [string]$CsvPath,
+
+    [switch]$NoCsvPrompt,
+
+    [switch]$DomainAccountSidsOnly,
+
+    [switch]$NoProgress,
+
+    [switch]$PassThru,
+
+    [Parameter(DontShow)]
+    [switch]$PauseAtEnd
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+# Relaunch Windows PowerShell/ISE in PowerShell 7.
+# EncodedCommand avoids quoting problems with UNC paths and spaces.
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $pwsh = Get-Command -Name 'pwsh.exe' -ErrorAction SilentlyContinue
+
+    if (-not $pwsh) {
+        Write-Host 'PowerShell 7 is required but was not found.' `
+            -ForegroundColor Red
+
+        Write-Host (
+            'Install it with: ' +
+            'winget install --id Microsoft.PowerShell --source winget'
+        ) -ForegroundColor Yellow
+
+        Read-Host 'Press Enter to close' | Out-Null
+        exit 1
+    }
+
+    if (-not $PSCommandPath) {
+        Write-Host (
+            'Save the script as a .ps1 file before running it.'
+        ) -ForegroundColor Red
+
+        Read-Host 'Press Enter to close' | Out-Null
+        exit 1
+    }
+
+    $commandParts = [System.Collections.Generic.List[string]]::new()
+    $escapedScriptPath = $PSCommandPath.Replace("'", "''")
+
+    $commandParts.Add("& '$escapedScriptPath'")
+
+    foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+        if ($entry.Key -eq 'PauseAtEnd') {
+            continue
+        }
+
+        if ($entry.Value -is [switch]) {
+            if ($entry.Value.IsPresent) {
+                $commandParts.Add("-$($entry.Key)")
+            }
+        }
+        else {
+            $escapedValue = ([string]$entry.Value).Replace("'", "''")
+            $commandParts.Add("-$($entry.Key) '$escapedValue'")
+        }
+    }
+
+    $commandParts.Add('-PauseAtEnd')
+
+    $command = $commandParts -join ' '
+
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($command)
+    )
+
+    Write-Host (
+        'Restarting the script in PowerShell 7...'
+    ) -ForegroundColor Cyan
+
+    $process = Start-Process `
+        -FilePath $pwsh.Source `
+        -ArgumentList (
+            '-NoLogo -NoProfile -ExecutionPolicy Bypass ' +
+            "-STA -EncodedCommand $encodedCommand"
+        ) `
+        -Wait `
+        -PassThru
+
+    exit $process.ExitCode
+}
+
+if (-not $IsWindows) {
+    throw 'This script requires Windows because it reads NTFS ACLs.'
+}
+
+function Add-ScanError {
+    param(
+        [System.Collections.Generic.List[object]]$List,
+        [string]$Stage,
+        [string]$FolderPath,
+        [AllowNull()]
+        [string]$Sid,
+        [System.Exception]$Exception
+    )
+
+    $List.Add(
+        [pscustomobject][ordered]@{
+            Stage        = $Stage
+            FolderPath   = $FolderPath
+            Sid          = $Sid
+            ErrorType    = $Exception.GetType().FullName
+            ErrorMessage = $Exception.Message
+        }
+    )
+}
+
+function Get-InnermostException {
+    param(
+        [System.Exception]$Exception
+    )
+
+    while ($Exception.InnerException) {
+        $Exception = $Exception.InnerException
+    }
+
+    return $Exception
+}
+
+function Select-CsvPath {
+    param(
+        [string]$SuggestedName
+    )
+
+    Add-Type -AssemblyName System.Windows.Forms
+
+    $dialog = [System.Windows.Forms.SaveFileDialog]::new()
+
+    try {
+        $dialog.Title = 'Save CSV report'
+        $dialog.Filter = 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+        $dialog.FileName = $SuggestedName
+        $dialog.DefaultExt = 'csv'
+        $dialog.AddExtension = $true
+        $dialog.OverwritePrompt = $true
+
+        if (
+            $dialog.ShowDialog() -eq
+            [System.Windows.Forms.DialogResult]::OK
+        ) {
+            return $dialog.FileName
+        }
+
+        return $null
+    }
+    finally {
+        $dialog.Dispose()
+    }
+}
+
+function Export-Report {
+    param(
+        [object[]]$Rows,
+        [string[]]$Columns,
+        [string]$Path
+    )
+
+    $expandedPath = [Environment]::ExpandEnvironmentVariables($Path)
+
+    if (-not [IO.Path]::GetExtension($expandedPath)) {
+        $expandedPath += '.csv'
+    }
+
+    $fullPath = [IO.Path]::GetFullPath($expandedPath)
+    $directory = [IO.Path]::GetDirectoryName($fullPath)
+
+    if (-not [IO.Directory]::Exists($directory)) {
+        [IO.Directory]::CreateDirectory($directory) | Out-Null
+    }
+
+    if ($Rows.Count -gt 0) {
+        $Rows |
+            Select-Object -Property $Columns |
+            Export-Csv `
+                -LiteralPath $fullPath `
+                -NoTypeInformation `
+                -Encoding utf8
+    }
+    else {
+        $header = (
+            '"' +
+            ($Columns -join '","') +
+            '"' +
+            [Environment]::NewLine
+        )
+
+        [IO.File]::WriteAllText(
+            $fullPath,
+            $header,
+            [Text.UTF8Encoding]::new($false)
+        )
+    }
+
+    return $fullPath
+}
+
+$exitCode = 0
+$fatalScanError = $null
+$stopwatch = [Diagnostics.Stopwatch]::StartNew()
+
+try {
+    if (-not $RootPath) {
+        $RootPath = Read-Host 'Root folder or UNC path'
+    }
+
+    if (-not $RootPath) {
+        throw 'No root path was provided.'
+    }
+
+    $root = Get-Item `
+        -LiteralPath $RootPath `
+        -Force `
+        -ErrorAction Stop
+
+    if (-not $root.PSIsContainer) {
+        throw "The root path is not a folder: $RootPath"
+    }
+
+    $rootPathNormalized = $root.FullName
+
+    $findings = [System.Collections.Generic.List[object]]::new()
+    $scanErrors = [System.Collections.Generic.List[object]]::new()
+
+    $sidState = (
+        [System.Collections.Generic.Dictionary[string, string]]::new(
+            [StringComparer]::OrdinalIgnoreCase
+        )
+    )
+
+    $affectedFolders = (
+        [System.Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::OrdinalIgnoreCase
+        )
+    )
+
+    $orphanedSids = (
+        [System.Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::OrdinalIgnoreCase
+        )
+    )
+
+    $folderStack = [System.Collections.Generic.Stack[string]]::new()
+    $folderStack.Push($rootPathNormalized)
+
+    [long]$foldersChecked = 0
+    [long]$aclEntriesChecked = 0
+    [long]$reparsePointsSkipped = 0
+
+    $lastProgress = [Diagnostics.Stopwatch]::StartNew()
+
+    Clear-Host
+
+    Write-Host 'NTFS Orphaned SID Audit' -ForegroundColor Cyan
+    Write-Host '-----------------------' -ForegroundColor DarkGray
+    Write-Host "PowerShell version : $($PSVersionTable.PSVersion)"
+    Write-Host "Root path          : $rootPathNormalized"
+    Write-Host 'Mode               : Read-only; ACLs will not be modified.'
+
+    $filterDescription = if ($DomainAccountSidsOnly) {
+        'Domain account SIDs only'
+    }
+    else {
+        'All unresolved SIDs'
+    }
+
+    Write-Host "SID filter         : $filterDescription"
+    Write-Host ''
+
+    try {
+        while ($folderStack.Count -gt 0) {
+            $currentFolder = $folderStack.Pop()
+            $foldersChecked++
+
+            $updateProgress = (
+                -not $NoProgress -and
+                (
+                    $foldersChecked -eq 1 -or
+                    $foldersChecked % 100 -eq 0 -or
+                    $lastProgress.ElapsedMilliseconds -ge 500
+                )
+            )
+
+            if ($updateProgress) {
+                $rate = if ($stopwatch.Elapsed.TotalSeconds -gt 0) {
+                    [Math]::Round(
+                        $foldersChecked /
+                        $stopwatch.Elapsed.TotalSeconds,
+                        1
+                    )
+                }
+                else {
+                    0
+                }
+
+                $status = (
+                    '{0:N0} folders | ' +
+                    '{1:N0} findings | ' +
+                    '{2:N1} folders/s'
+                ) -f $foldersChecked, $findings.Count, $rate
+
+                Write-Progress `
+                    -Activity 'Scanning folders and checking NTFS ACLs' `
+                    -Status $status `
+                    -CurrentOperation $currentFolder
+
+                $lastProgress.Restart()
+            }
+
+            try {
+                $acl = Get-Acl `
+                    -LiteralPath $currentFolder `
+                    -ErrorAction Stop
+
+                foreach ($rule in $acl.Access) {
+                    $aclEntriesChecked++
+                    $sid = $null
+
+                    try {
+                        if (
+                            $rule.IdentityReference -is
+                            [Security.Principal.SecurityIdentifier]
+                        ) {
+                            $sid = $rule.IdentityReference.Value
+                        }
+                        else {
+                            $sid = (
+                                $rule.IdentityReference.Translate(
+                                    [Security.Principal.SecurityIdentifier]
+                                )
+                            ).Value
+                        }
+                    }
+                    catch {
+                        Add-ScanError `
+                            -List $scanErrors `
+                            -Stage 'ResolveIdentityToSid' `
+                            -FolderPath $currentFolder `
+                            -Sid $null `
+                            -Exception (
+                                Get-InnermostException $_.Exception
+                            )
+
+                        continue
+                    }
+
+                    if (
+                        $DomainAccountSidsOnly -and
+                        $sid -notmatch
+                        '^S-1-5-21-\d+-\d+-\d+-\d+$'
+                    ) {
+                        continue
+                    }
+
+                    if ($sidState.ContainsKey($sid)) {
+                        $state = $sidState[$sid]
+                    }
+                    else {
+                        try {
+                            $securityIdentifier = (
+                                [Security.Principal.SecurityIdentifier]::new(
+                                    $sid
+                                )
+                            )
+
+                            $null = $securityIdentifier.Translate(
+                                [Security.Principal.NTAccount]
+                            )
+
+                            $state = 'Resolved'
+                        }
+                        catch {
+                            $translationException = (
+                                Get-InnermostException $_.Exception
+                            )
+
+                            if (
+                                $translationException -is
+                                [Security.Principal.IdentityNotMappedException]
+                            ) {
+                                $state = 'Orphaned'
+                            }
+                            else {
+                                $state = 'Error'
+
+                                Add-ScanError `
+                                    -List $scanErrors `
+                                    -Stage 'TranslateSidToAccount' `
+                                    -FolderPath $currentFolder `
+                                    -Sid $sid `
+                                    -Exception $translationException
+                            }
+                        }
+
+                        $sidState[$sid] = $state
+                    }
+
+                    if ($state -ne 'Orphaned') {
+                        continue
+                    }
+
+                    $null = $affectedFolders.Add($currentFolder)
+                    $null = $orphanedSids.Add($sid)
+
+                    $findings.Add(
+                        [pscustomobject][ordered]@{
+                            FolderPath = $currentFolder
+                            Sid = $sid
+                            Rights = $rule.FileSystemRights.ToString()
+                            AccessType = $rule.AccessControlType.ToString()
+                            IsInherited = [bool]$rule.IsInherited
+                            InheritanceFlags = (
+                                $rule.InheritanceFlags.ToString()
+                            )
+                            PropagationFlags = (
+                                $rule.PropagationFlags.ToString()
+                            )
+                        }
+                    )
+                }
+            }
+            catch {
+                Add-ScanError `
+                    -List $scanErrors `
+                    -Stage 'ReadAcl' `
+                    -FolderPath $currentFolder `
+                    -Sid $null `
+                    -Exception (
+                        Get-InnermostException $_.Exception
+                    )
+            }
+
+            try {
+                $children = Get-ChildItem `
+                    -LiteralPath $currentFolder `
+                    -Directory `
+                    -Force `
+                    -ErrorAction Stop
+
+                foreach ($child in $children) {
+                    $isReparsePoint = (
+                        (
+                            $child.Attributes -band
+                            [IO.FileAttributes]::ReparsePoint
+                        ) -ne 0
+                    )
+
+                    if ($isReparsePoint) {
+                        $reparsePointsSkipped++
+                        continue
+                    }
+
+                    $folderStack.Push($child.FullName)
+                }
+            }
+            catch {
+                Add-ScanError `
+                    -List $scanErrors `
+                    -Stage 'EnumerateDirectories' `
+                    -FolderPath $currentFolder `
+                    -Sid $null `
+                    -Exception (
+                        Get-InnermostException $_.Exception
+                    )
+            }
+        }
+    }
+    catch {
+        $fatalScanError = $_
+
+        Add-ScanError `
+            -List $scanErrors `
+            -Stage 'FatalScan' `
+            -FolderPath $rootPathNormalized `
+            -Sid $null `
+            -Exception (
+                Get-InnermostException $_.Exception
+            )
+
+        $exitCode = 2
+    }
+    finally {
+        if (-not $NoProgress) {
+            Write-Progress `
+                -Activity 'Scanning folders and checking NTFS ACLs' `
+                -Completed
+        }
+    }
+
+    $stopwatch.Stop()
+
+    $orderedFindings = @(
+        $findings |
+            Sort-Object `
+                FolderPath,
+                Sid,
+                AccessType,
+                Rights,
+                IsInherited
+    )
+
+    Write-Host ''
+
+    if ($fatalScanError) {
+        Write-Host (
+            'The scan stopped because of an unexpected error.'
+        ) -ForegroundColor Red
+
+        Write-Host (
+            "Reason: $($fatalScanError.Exception.Message)"
+        ) -ForegroundColor Red
+    }
+    else {
+        Write-Host 'Scan completed.' -ForegroundColor Green
+    }
+
+    Write-Host ''
+    Write-Host ('Folders checked        : {0:N0}' -f $foldersChecked)
+    Write-Host ('ACL entries checked    : {0:N0}' -f $aclEntriesChecked)
+    Write-Host ('Affected folders       : {0:N0}' -f $affectedFolders.Count)
+    Write-Host ('Orphaned ACEs found    : {0:N0}' -f $orderedFindings.Count)
+    Write-Host ('Unique orphaned SIDs   : {0:N0}' -f $orphanedSids.Count)
+    Write-Host (
+        'Reparse points skipped : {0:N0}' -f
+        $reparsePointsSkipped
+    )
+    Write-Host ('Errors and warnings    : {0:N0}' -f $scanErrors.Count)
+    Write-Host (
+        'Duration               : {0:hh\:mm\:ss}' -f
+        $stopwatch.Elapsed
+    )
+
+    if ($orderedFindings.Count -gt 0) {
+        Write-Host ''
+
+        $orderedFindings |
+            Format-Table `
+                FolderPath,
+                Sid,
+                Rights,
+                AccessType,
+                IsInherited `
+                -AutoSize |
+            Out-Host
+    }
+    else {
+        Write-Host ''
+
+        Write-Host (
+            'No potential orphaned SID entries were found.'
+        ) -ForegroundColor Green
+    }
+
+    $selectedCsvPath = $CsvPath
+
+    if (-not $selectedCsvPath -and -not $NoCsvPrompt) {
+        $suggestedName = (
+            'OrphanedNtfsSids_{0:yyyyMMdd_HHmmss}.csv' -f
+            (Get-Date)
+        )
+
+        $selectedCsvPath = Select-CsvPath `
+            -SuggestedName $suggestedName
+    }
+
+    if ($selectedCsvPath) {
+        try {
+            $findingColumns = @(
+                'FolderPath'
+                'Sid'
+                'Rights'
+                'AccessType'
+                'IsInherited'
+                'InheritanceFlags'
+                'PropagationFlags'
+            )
+
+            $findingsPath = Export-Report `
+                -Rows $orderedFindings `
+                -Columns $findingColumns `
+                -Path $selectedCsvPath
+
+            Write-Host (
+                "Findings CSV          : $findingsPath"
+            ) -ForegroundColor Cyan
+
+            if ($scanErrors.Count -gt 0) {
+                $errorFileName = (
+                    [IO.Path]::GetFileNameWithoutExtension(
+                        $findingsPath
+                    ) +
+                    '_Errors.csv'
+                )
+
+                $errorPath = Join-Path `
+                    -Path (
+                        [IO.Path]::GetDirectoryName($findingsPath)
+                    ) `
+                    -ChildPath $errorFileName
+
+                $errorColumns = @(
+                    'Stage'
+                    'FolderPath'
+                    'Sid'
+                    'ErrorType'
+                    'ErrorMessage'
+                )
+
+                $exportedErrorPath = Export-Report `
+                    -Rows @($scanErrors) `
+                    -Columns $errorColumns `
+                    -Path $errorPath
+
+                Write-Host (
+                    "Errors CSV            : $exportedErrorPath"
+                ) -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host (
+                "CSV export failed: $($_.Exception.Message)"
+            ) -ForegroundColor Red
+
+            if ($exitCode -eq 0) {
+                $exitCode = 3
+            }
+        }
+    }
+    elseif (-not $NoCsvPrompt) {
+        Write-Host (
+            'CSV export was cancelled.'
+        ) -ForegroundColor Yellow
+    }
+
+    if ($PassThru) {
+        $orderedFindings
+    }
+}
+catch {
+    if ($stopwatch.IsRunning) {
+        $stopwatch.Stop()
+    }
+
+    Write-Host (
+        "The script failed: $($_.Exception.Message)"
+    ) -ForegroundColor Red
+
+    $exitCode = 1
+}
+finally {
+    if ($PauseAtEnd) {
+        Write-Host ''
+        Read-Host 'Press Enter to close' | Out-Null
+    }
+}
+
+exit $exitCode
