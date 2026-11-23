@@ -1,0 +1,53 @@
+function Get-AssessmentComputer {
+
+    param(
+        [int]$InactiveDays = 90
+    )
+
+    $domains = (Get-ADForest).Domains
+    $inactiveDate = (Get-Date).AddDays(-$InactiveDays)
+
+    foreach ($domainName in $domains) {
+
+        $computers = Get-ADComputer `
+            -Filter * `
+            -Server $domainName `
+            -Properties Enabled,
+                        OperatingSystem,
+                        OperatingSystemVersion,
+                        LastLogonDate,
+                        PasswordLastSet,
+                        WhenCreated
+
+        foreach ($computer in $computers) {
+
+            $neverLoggedOn = $false
+            $inactiveOver90Days = $false
+
+            if ($computer.Enabled) {
+
+                if ($null -eq $computer.LastLogonDate) {
+                    $neverLoggedOn = $true
+                }
+                elseif ($computer.LastLogonDate -lt $inactiveDate) {
+                    $inactiveOver90Days = $true
+                }
+            }
+
+            [PSCustomObject]@{
+                Domain                 = $domainName
+                ComputerName           = $computer.Name
+                Enabled                = $computer.Enabled
+                OperatingSystem        = $computer.OperatingSystem
+                OperatingSystemVersion = $computer.OperatingSystemVersion
+                LastLogonDate          = $computer.LastLogonDate
+                PasswordLastSet        = $computer.PasswordLastSet
+                WhenCreated            = $computer.WhenCreated
+                NeverLoggedOn          = $neverLoggedOn
+                InactiveOver90Days     = $inactiveOver90Days
+            }
+        }
+    }
+}
+
+Export-ModuleMember -Function Get-AssessmentComputer
