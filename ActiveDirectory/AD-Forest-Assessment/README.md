@@ -191,13 +191,6 @@ Output/
 
 The output directory contains environment-specific and potentially sensitive Active Directory information. Real assessment output should therefore not be committed to a public portfolio repository.
 
-A recommended `.gitignore` entry is:
-
-```gitignore
-Output/*
-!Output/.gitkeep
-```
-
 ## Assessment status
 
 The framework distinguishes three execution states:
@@ -232,15 +225,6 @@ The assessment currently evaluates direct and recursively resolved indirect user
 - Direct-versus-indirect privileged access is reported, but the complete nested membership path is not reconstructed.
 - Some Active Directory groups can fail membership enumeration because of directory-side or object-specific conditions. These are reported through `MembershipQuerySuccessful` and the assessment warning status rather than treated as zero memberships.
 - Security findings are deliberately limited to deterministic checks implemented by the framework and should not be treated as a replacement for a full Active Directory security product or manual security review.
-
-## Security and portfolio usage
-
-Before publishing screenshots or sample outputs:
-
-- Use lab or synthetic data.
-- Remove real usernames, server names, domain names, IP addresses, group structures, trust relationships, and findings.
-- Do not commit production assessment output.
-- Review repository history before making a previously private repository public.
 
 ## Version
 
