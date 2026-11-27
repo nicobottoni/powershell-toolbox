@@ -7,6 +7,9 @@ function Get-AssessmentUser {
     $domains = (Get-ADForest).Domains
     $inactiveDate = (Get-Date).AddDays(-$InactiveDays)
 
+    # Detect interdomain trust accounts
+    $interdomainTrustAccountFlag = 0x0800
+
     foreach ($domainName in $domains) {
 
         $users = Get-ADUser `
@@ -19,12 +22,17 @@ function Get-AssessmentUser {
                         PasswordNeverExpires,
                         PasswordNotRequired,
                         LockedOut,
+                        UserAccountControl,
                         WhenCreated
 
         foreach ($user in $users) {
+            
+            $isInterdomainTrustAccount = (
+                $user.UserAccountControl -band $interdomainTrustAccountFlag
+            ) -ne 0
 
             $neverLoggedOn = $false
-            $inactiveOver90Days = $false
+            $isInactive = $false
 
             if ($user.Enabled) {
 
@@ -32,7 +40,7 @@ function Get-AssessmentUser {
                     $neverLoggedOn = $true
                 }
                 elseif ($user.LastLogonDate -lt $inactiveDate) {
-                    $inactiveOver90Days = $true
+                    $isInactive = $true
                 }
             }
 
@@ -48,7 +56,8 @@ function Get-AssessmentUser {
                 LockedOut            = $user.LockedOut
                 WhenCreated          = $user.WhenCreated
                 NeverLoggedOn        = $neverLoggedOn
-                InactiveOver90Days   = $inactiveOver90Days
+                IsInactive           = $isInactive
+                IsInterdomainTrustAccount = $isInterdomainTrustAccount
             }
         }
     }

@@ -22,7 +22,7 @@ function Get-AssessmentComputer {
         foreach ($computer in $computers) {
 
             $neverLoggedOn = $false
-            $inactiveOver90Days = $false
+            $isInactive = $false
 
             if ($computer.Enabled) {
 
@@ -30,7 +30,7 @@ function Get-AssessmentComputer {
                     $neverLoggedOn = $true
                 }
                 elseif ($computer.LastLogonDate -lt $inactiveDate) {
-                    $inactiveOver90Days = $true
+                    $isInactive = $true
                 }
             }
 
@@ -44,7 +44,7 @@ function Get-AssessmentComputer {
                 PasswordLastSet        = $computer.PasswordLastSet
                 WhenCreated            = $computer.WhenCreated
                 NeverLoggedOn          = $neverLoggedOn
-                InactiveOver90Days     = $inactiveOver90Days
+                IsInactive             = $isInactive
             }
         }
     }

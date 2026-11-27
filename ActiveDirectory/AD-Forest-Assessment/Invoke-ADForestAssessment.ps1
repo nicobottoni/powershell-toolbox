@@ -1,7 +1,23 @@
+# Assessment metadata
+$assessmentVersion = "1.0.0"
+$assessmentStartTime = Get-Date
+
 # Import required modules
 Import-Module "$PSScriptRoot\Modules\ADA.Core.psm1" -Force
 
-Test-AssessmentPrerequisite
+try {
+
+    Test-AssessmentPrerequisite
+
+}
+catch {
+
+    Write-Host ""
+    Write-Host "Assessment failed." -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+
+    return
+}
 
 Import-Module ActiveDirectory
 Import-Module "$PSScriptRoot\Modules\ADA.Forest.psm1" -Force
@@ -14,12 +30,43 @@ Import-Module "$PSScriptRoot\Modules\ADA.Group.psm1" -Force
 Import-Module "$PSScriptRoot\Modules\ADA.Security.psm1" -Force
 Import-Module "$PSScriptRoot\Modules\ADA.Reporting.psm1" -Force
 
+# Load assessment configuration
+$configPath = Join-Path $PSScriptRoot "Config\AssessmentConfig.psd1"
+
+try {
+
+    if (-not (Test-Path $configPath)) {
+        throw "Assessment configuration file not found: $configPath"
+    }
+
+    $config = Import-PowerShellDataFile `
+        -Path $configPath `
+        -ErrorAction Stop
+
+    Test-AssessmentConfiguration `
+        -Config $config | Out-Null
+
+}
+catch {
+
+    Write-Host ""
+    Write-Host "Assessment failed." -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+
+    return
+}
+
+$config = Import-PowerShellDataFile -Path $configPath
 
 # Create output directory
 $outputPath = New-AssessmentOutputDirectory `
     -BasePath "$PSScriptRoot\Output"
 
 $logPath = Join-Path $outputPath "Assessment.log"
+
+# Initialize assessment status
+$assessmentStatus = "Completed"
+$assessmentWarnings = @()
 
 Write-AssessmentLog `
     -Message "AD Forest Assessment started." `
@@ -31,7 +78,29 @@ Write-AssessmentLog `
     -Message "Collecting forest information." `
     -LogPath $logPath
 
-$forest = Get-AssessmentForest
+try {
+
+    $forest = Get-AssessmentForest
+
+}
+catch {
+
+    $assessmentStatus = "Failed"
+
+    $errorMessage = "Failed to collect forest information: $($_.Exception.Message)"
+
+    Write-AssessmentLog `
+        -Message $errorMessage `
+        -LogPath $logPath `
+        -Level "ERROR"
+
+    Write-Host ""
+    Write-Host "Assessment failed." -ForegroundColor Red
+    Write-Host $errorMessage -ForegroundColor Red
+    Write-Host "Output directory: $outputPath"
+
+    return
+}
 
 Write-Host ""
 Write-Host "Forest Information" -ForegroundColor Cyan
@@ -44,6 +113,26 @@ Export-AssessmentData `
     -Data $forest `
     -Name "Forest" `
     -OutputPath $outputPath | Out-Null
+
+# Check group assessment warnings
+$groupQueryErrors = @(
+    $groups |
+        Where-Object { -not $_.MembershipQuerySuccessful }
+)
+
+if ($groupQueryErrors.Count -gt 0) {
+
+    $assessmentStatus = "CompletedWithWarnings"
+
+    $warningMessage = "$($groupQueryErrors.Count) group membership query(s) could not be completed."
+
+    $assessmentWarnings += $warningMessage
+
+    Write-AssessmentLog `
+        -Message $warningMessage `
+        -LogPath $logPath `
+        -Level "WARNING"
+}
 
 Write-AssessmentLog `
     -Message "Forest information exported to Forest.csv." `
@@ -103,7 +192,8 @@ Write-AssessmentLog `
     -Message "Collecting user information." `
     -LogPath $logPath
 
-$users = Get-AssessmentUser -InactiveDays 90
+$users = Get-AssessmentUser `
+    -InactiveDays $config.InactiveUserDays
 
 Write-Host ""
 Write-Host "User Information" -ForegroundColor Cyan
@@ -114,7 +204,7 @@ $users | Format-Table `
     LastLogonDate,
     PasswordNeverExpires,
     NeverLoggedOn,
-    InactiveOver90Days `
+    IsInactive `
     -AutoSize
 
 Write-Host ""
@@ -125,7 +215,8 @@ Write-Host "Total Users             :" @($users).Count
 Write-Host "Enabled Users           :" @($users | Where-Object Enabled).Count
 Write-Host "Disabled Users          :" @($users | Where-Object { -not $_.Enabled }).Count
 Write-Host "Never Logged On         :" @($users | Where-Object NeverLoggedOn).Count
-Write-Host "Inactive > 90 Days      :" @($users | Where-Object InactiveOver90Days).Count
+Write-Host "Inactive > $($config.InactiveUserDays) Days :" `
+    @($users | Where-Object IsInactive).Count
 Write-Host "Password Never Expires  :" @($users | Where-Object PasswordNeverExpires).Count
 Write-Host "Password Not Required   :" @($users | Where-Object PasswordNotRequired).Count
 Write-Host "Locked Users            :" @($users | Where-Object LockedOut).Count
@@ -147,7 +238,8 @@ Write-AssessmentLog `
     -Message "Collecting computer information." `
     -LogPath $logPath
 
-$computers = Get-AssessmentComputer -InactiveDays 90
+$computers = Get-AssessmentComputer `
+    -InactiveDays $config.InactiveComputerDays
 
 Write-Host ""
 Write-Host "Computer Information" -ForegroundColor Cyan
@@ -158,7 +250,7 @@ $computers | Format-Table `
     OperatingSystem,
     LastLogonDate,
     NeverLoggedOn,
-    InactiveOver90Days `
+    IsInactive `
     -AutoSize
 
 
@@ -170,7 +262,8 @@ Write-Host "Total Computers         :" @($computers).Count
 Write-Host "Enabled Computers       :" @($computers | Where-Object Enabled).Count
 Write-Host "Disabled Computers      :" @($computers | Where-Object { -not $_.Enabled }).Count
 Write-Host "Never Logged On         :" @($computers | Where-Object NeverLoggedOn).Count
-Write-Host "Inactive > 90 Days      :" @($computers | Where-Object InactiveOver90Days).Count
+Write-Host "Inactive > $($config.InactiveComputerDays) Days :" `
+    @($computers | Where-Object IsInactive).Count
 
 
 # Export computer information
@@ -235,7 +328,9 @@ Write-AssessmentLog `
     -Message "Collecting privileged account information." `
     -LogPath $logPath
 
-$privilegedAccounts = Get-AssessmentPrivilegedAccount
+$privilegedAccounts = @(
+    Get-AssessmentPrivilegedAccount
+)
 
 Write-Host ""
 Write-Host "Privileged Account Information" -ForegroundColor Cyan
@@ -243,6 +338,7 @@ Write-Host "=============================="
 
 $privilegedAccounts | Format-Table `
     PrivilegedGroup,
+    MembershipType,
     SamAccountName,
     Enabled,
     LastLogonDate,
@@ -262,6 +358,8 @@ Write-Host "=========================="
 
 Write-Host "Privileged Memberships      :" @($privilegedAccounts).Count
 Write-Host "Unique Privileged Accounts  :" @($uniquePrivilegedAccounts).Count
+Write-Host "Direct Memberships          :" @($privilegedAccounts | Where-Object MembershipType -eq "Direct").Count
+Write-Host "Indirect Memberships        :" @($privilegedAccounts | Where-Object MembershipType -eq "Indirect").Count
 Write-Host "Enabled Memberships         :" @($privilegedAccounts | Where-Object Enabled).Count
 Write-Host "Disabled Memberships        :" @($privilegedAccounts | Where-Object { -not $_.Enabled }).Count
 Write-Host "Password Never Expires      :" @($privilegedAccounts | Where-Object PasswordNeverExpires).Count
@@ -293,10 +391,28 @@ Write-AssessmentLog `
     -Message "Analyzing privileged account security findings." `
     -LogPath $logPath
 
-$findings = @(
-    Test-AssessmentPrivilegedAccount `
-        -PrivilegedAccounts $privilegedAccounts `
-        -InactiveDays 90
+$findings = @()
+
+if (@($privilegedAccounts).Count -gt 0) {
+
+    $findings += @(
+        Test-AssessmentPrivilegedAccount `
+            -PrivilegedAccounts $privilegedAccounts `
+            -InactiveDays $config.InactiveUserDays
+    )
+}
+
+$findings += @(
+    Test-AssessmentUserSecurity `
+        -Users $users `
+        -PrivilegedAccounts $privilegedAccounts
+)
+
+$findings += @(
+    Test-AssessmentComputerSecurity `
+        -Computers $computers `
+        -InactiveDays $config.InactiveComputerDays `
+        -NewComputerGraceDays $config.NewComputerGraceDays
 )
 
 Write-Host ""
@@ -421,6 +537,20 @@ else {
 }
 
 
+# Finalize assessment metadata
+$assessmentEndTime = Get-Date
+$assessmentDuration = $assessmentEndTime - $assessmentStartTime
+
+$assessmentMetadata = [PSCustomObject]@{
+    Version           = $assessmentVersion
+    HostName          = $env:COMPUTERNAME
+    PowerShellVersion = $PSVersionTable.PSVersion.ToString()
+    StartTime         = $assessmentStartTime
+    EndTime           = $assessmentEndTime
+    Duration          = $assessmentDuration
+}
+
+
 # Generate HTML report
 Write-AssessmentLog `
     -Message "Generating HTML assessment report." `
@@ -428,6 +558,11 @@ Write-AssessmentLog `
 
 $reportPath = New-AssessmentHtmlReport `
     -OutputPath $outputPath `
+    -AssessmentStatus $assessmentStatus `
+    -AssessmentWarnings $assessmentWarnings `
+    -AssessmentMetadata $assessmentMetadata `
+    -InactiveUserDays $config.InactiveUserDays `
+    -InactiveComputerDays $config.InactiveComputerDays `
     -Forest $forest `
     -Domains $domains `
     -DomainControllers $domainControllers `
@@ -444,10 +579,37 @@ Write-AssessmentLog `
 
 
 # Complete assessment
-Write-AssessmentLog `
-    -Message "AD Forest Assessment completed successfully." `
-    -LogPath $logPath
+if ($assessmentStatus -eq "Completed") {
+
+    Write-AssessmentLog `
+        -Message "AD Forest Assessment completed successfully." `
+        -LogPath $logPath
+
+}
+elseif ($assessmentStatus -eq "CompletedWithWarnings") {
+
+    Write-AssessmentLog `
+        -Message "AD Forest Assessment completed with warnings." `
+        -LogPath $logPath `
+        -Level "WARNING"
+}
 
 Write-Host ""
-Write-Host "Assessment completed." -ForegroundColor Green
+
+if ($assessmentStatus -eq "Completed") {
+
+    Write-Host "Assessment completed successfully." `
+        -ForegroundColor Green
+
+}
+elseif ($assessmentStatus -eq "CompletedWithWarnings") {
+
+    Write-Host "Assessment completed with warnings." `
+        -ForegroundColor Yellow
+
+    foreach ($warning in $assessmentWarnings) {
+        Write-Host "  - $warning" -ForegroundColor Yellow
+    }
+}
+
 Write-Host "Output directory: $outputPath"

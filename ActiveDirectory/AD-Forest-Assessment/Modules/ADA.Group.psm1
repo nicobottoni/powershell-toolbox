@@ -20,13 +20,21 @@ function Get-AssessmentGroup {
 
             if ($memberCount -gt 0) {
 
-                $nestedGroupCount = @(
-                    Get-ADGroupMember `
-                        -Identity $group.DistinguishedName `
-                        -Server $domainName `
-                        -ErrorAction SilentlyContinue |
-                    Where-Object ObjectClass -eq 'group'
-                ).Count
+                try {
+            
+                    $nestedGroupCount = @(
+                        Get-ADGroupMember `
+                            -Identity $group.DistinguishedName `
+                            -Server $domainName `
+                            -ErrorAction Stop |
+                        Where-Object ObjectClass -eq 'group'
+                    ).Count
+            
+                }
+                catch {
+            
+                    $nestedGroupCount = $null
+                }
             }
 
             [PSCustomObject]@{
@@ -41,6 +49,7 @@ function Get-AssessmentGroup {
                 IsEmpty          = ($memberCount -eq 0)
                 HasDescription   = (-not [string]::IsNullOrWhiteSpace($group.Description))
                 WhenCreated      = $group.WhenCreated
+                MembershipQuerySuccessful = ($null -ne $nestedGroupCount)
             }
         }
     }
