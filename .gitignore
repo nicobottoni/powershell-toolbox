@@ -14,8 +14,8 @@
 !UniversalPrint-Locations.csv
 
 # AD Forest Assessment output
-Output/*
-!Output/.gitkeep
+ActiveDirectory/AD-Forest-Assessment/Output/*
+!ActiveDirectory/AD-Forest-Assessment/Output/.gitkeep
 
 # Secrets and local configuration
 *.secret.ps1
