@@ -83,8 +83,7 @@ AD-Forest-Assessment/
 |-- Output/
 |-- Invoke-ADForestAssessment.ps1
 |-- README.md
-|-- CHANGELOG.md
-`-- LICENSE
+`-- CHANGELOG.md
 ```
 
 ## Architecture
