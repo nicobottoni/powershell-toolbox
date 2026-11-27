@@ -13,6 +13,10 @@
 # Allow sanitized example CSV
 !UniversalPrint-Locations.csv
 
+# AD Forest Assessment output
+ActiveDirectory/AD-Forest-Assessment/Output/*
+!ActiveDirectory/AD-Forest-Assessment/Output/.gitkeep
+
 # Secrets and local configuration
 *.secret.ps1
 *.local.ps1
